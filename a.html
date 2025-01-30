@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>リアルタイム物体認識</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <style>
+        body {
+            text-align: center;
+            background: #111;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        video {
+            display: none;
+        }
+        canvas {
+            width: 100%;
+            max-width: 640px;
+            border: 2px solid white;
+            border-radius: 10px;
+        }
+        .controls {
+            margin: 10px;
+        }
+        button, input {
+            padding: 10px;
+            margin: 5px;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            border-radius: 5px;
+        }
+        .filter-btn { background: #2196F3; color: white; }
+        .toggle-btn { background: #FF5722; color: white; }
+        .switch-btn { background: #4CAF50; color: white; }
+        .record-btn { background: #f44336; color: white; }
+        .slider {
+            width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <h2>リアルタイム物体認識</h2>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+    <div class="controls">
+        <button class="filter-btn" onclick="changeFilter()">フィルター変更</button>
+        <button class="toggle-btn" onclick="toggleOverlay()">トラッカー切替</button>
+        <button class="switch-btn" onclick="switchCamera()">カメラ切替</button>
+        <button class="record-btn" onclick="toggleRecording()">録画開始</button>
+        <br>
+        <label for="thickness">枠の太さ:</label>
+        <input type="range" id="thickness" class="slider" min="1" max="10" value="2" oninput="updateThickness()">
+    </div>
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let model, isOverlayEnabled = true, filterIndex = 0, isRecording = false, mediaRecorder, recordedChunks = [];
+        let strokeWidth = 2, currentFacingMode = "user";
+        const filters = ['none', 'grayscale(100%)', 'sepia(100%)', 'invert(1) contrast(2) brightness(0.5)']; // ナイトビジョン風（緑+白）
+
+        const labelsJP = {
+            "person": "人", "bicycle": "自転車", "car": "車", "motorcycle": "バイク",
+            "airplane": "飛行機", "bus": "バス", "train": "電車", "truck": "トラック",
+            "boat": "ボート", "traffic light": "信号", "fire hydrant": "消火栓",
+            "stop sign": "停止標識", "parking meter": "駐車メーター", "bench": "ベンチ",
+            "bird": "鳥", "cat": "猫", "dog": "犬", "horse": "馬", "sheep": "羊",
+            "cow": "牛", "elephant": "象", "bear": "熊", "zebra": "シマウマ",
+            "giraffe": "キリン", "backpack": "リュック", "umbrella": "傘",
+            "handbag": "ハンドバッグ", "tie": "ネクタイ", "suitcase": "スーツケース",
+            "frisbee": "フリスビー", "skis": "スキー", "snowboard": "スノーボード",
+            "sports ball": "ボール", "kite": "凧", "baseball bat": "バット",
+            "baseball glove": "グローブ", "skateboard": "スケートボード",
+            "surfboard": "サーフボード", "tennis racket": "テニスラケット",
+            "bottle": "ボトル", "wine glass": "ワイングラス", "cup": "カップ",
+            "fork": "フォーク", "knife": "ナイフ", "spoon": "スプーン",
+            "bowl": "ボウル", "banana": "バナナ", "apple": "リンゴ", "sandwich": "サンドイッチ",
+            "orange": "オレンジ", "broccoli": "ブロッコリー", "carrot": "ニンジン",
+            "hot dog": "ホットドッグ", "pizza": "ピザ", "donut": "ドーナツ", "cake": "ケーキ"
+        };
+
+        async function setupCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacingMode } });
+            video.srcObject = stream;
+            return new Promise(resolve => video.onloadedmetadata = resolve);
+        }
+
+        async function loadModel() {
+            model = await cocoSsd.load();
+            detectObjects();
+        }
+
+        function detectObjects() {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            ctx.scale(-1, 1);
+            ctx.translate(-canvas.width, 0);
+            ctx.filter = filters[filterIndex];
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            ctx.restore();
+
+            if (isOverlayEnabled) {
+                model.detect(video).then(predictions => {
+                    predictions.forEach(pred => {
+                        const [x, y, width, height] = pred.bbox;
+                        ctx.strokeStyle = 'red';
+                        ctx.lineWidth = strokeWidth;
+                        ctx.strokeRect(x, y, width, height);
+                        ctx.fillStyle = 'red';
+                        ctx.fillText(`${labelsJP[pred.class] || pred.class} (${Math.round(pred.score * 100)}%)`, x, y - 5);
+                    });
+                });
+            }
+            requestAnimationFrame(detectObjects);
+        }
+
+        function changeFilter() {
+            filterIndex = (filterIndex + 1) % filters.length;
+        }
+
+        function toggleOverlay() {
+            isOverlayEnabled = !isOverlayEnabled;
+        }
+
+        function switchCamera() {
+            currentFacingMode = currentFacingMode === "user" ? "environment" : "user";
+            setupCamera();
+        }
+
+        function updateThickness() {
+            strokeWidth = document.getElementById('thickness').value;
+        }
+
+        function toggleRecording() {
+            if (!isRecording) {
+            recordedChunks = [];
+            const stream = canvas.captureStream();
+            mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm" });
+            mediaRecorder.ondataavailable = event => recordedChunks.push(event.data);
+            mediaRecorder.onstop = saveAndUploadRecording;
+            mediaRecorder.start();
+            isRecording = true;
+            document.querySelector('.record-btn').innerText = "録画停止";
+        } else {
+            mediaRecorder.stop();
+            isRecording = false;
+            document.querySelector('.record-btn').innerText = "録画開始";
+        }
+    }
+
+    function saveAndUploadRecording() {
+        const blob = new Blob(recordedChunks, { type: "video/webm" });
+        const url = URL.createObjectURL(blob);
+
+        // **1. ローカルにダウンロード**
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `recording_${new Date().getTime()}.webm`;
+        a.click();
+
+        // **2. サーバーにアップロード**
+        const formData = new FormData();
+        formData.append("video", blob, `recording_${new Date().getTime()}.webm`);
+
+        fetch("http://localhost:5000/upload", {
+            method: "POST",
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => console.log("Upload Success:", data))
+        .catch(error => console.error("Upload Error:", error));
+    }
+        function saveRecording() {
+            const blob = new Blob(recordedChunks, { type: "video/webm" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "recording.webm";
+            a.click();
+        }
+
+        setupCamera().then(loadModel);
+    </script>
+</body>
+</html>
